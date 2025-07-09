@@ -21,9 +21,27 @@ Both test files are included and will be executed during the CI/CD pipeline.
 
 ## Setup Instructions
 
-### 1. Required Secrets
+### 1. Docker Registry Setup
+
+⚠️ **Important**: Configure your Docker registry before running the workflow.
+
+See [DOCKER_SETUP.md](DOCKER_SETUP.md) for detailed instructions on:
+- GitHub Container Registry (GHCR) setup
+- Docker Hub setup (recommended for easier configuration)
+- Troubleshooting registry permission issues
+
+### 2. Required Secrets
 
 Add these secrets to your GitHub repository (Settings → Secrets and variables → Actions):
+
+#### For Docker Hub (Recommended)
+```
+DOCKER_USERNAME            # Your Docker Hub username
+DOCKER_PASSWORD            # Your Docker Hub access token
+```
+
+#### For GitHub Container Registry (Alternative)
+No additional secrets needed - uses GITHUB_TOKEN automatically.
 
 #### For SSH Deployment (Docker Compose)
 ```
@@ -46,14 +64,23 @@ PROD_SERVICE_URL       # http://your-production-domain.com
 KUBE_CONFIG            # Base64 encoded kubeconfig file
 ```
 
-### 2. Environment Configuration
+### 3. Repository Variables
+
+Set these in your repository variables (Settings → Secrets and variables → Actions → Variables):
+
+```
+DOCKER_IMAGE_NAME          # e.g., 'your-dockerhub-username/crawler-service' or 'ghcr.io/your-username/your-repo'
+DEPLOYMENT_METHOD          # Options: 'docker-compose', 'kubernetes'
+```
+
+### 4. Environment Configuration
 
 Create environments in your GitHub repository (Settings → Environments):
 
 - **staging**: For staging deployments
 - **production**: For production deployments (add protection rules as needed)
 
-### 3. Repository Variables
+### 5. Repository Variables
 
 Set these in your repository variables (Settings → Secrets and variables → Actions → Variables):
 
