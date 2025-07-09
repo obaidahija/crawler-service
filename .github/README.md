@@ -4,11 +4,20 @@ This repository includes a comprehensive GitHub Actions workflow that handles te
 
 ## Workflow Features
 
-- **Automated Testing**: Runs your test suite on every push and pull request
+- **Automated Testing**: Runs pytest unit tests and integration tests
 - **Docker Image Building**: Builds and pushes Docker images to GitHub Container Registry
 - **Multi-Environment Deployment**: Supports staging and production deployments
 - **Health Checks**: Verifies service health after deployment
 - **Manual Deployment**: Allows manual triggering with environment selection
+
+## Test Structure
+
+The workflow runs two types of tests:
+
+1. **Unit Tests** (`test_crawler.py`): Fast pytest tests using FastAPI TestClient
+2. **Integration Tests** (`test_service.py`): End-to-end tests against running service
+
+Both test files are included and will be executed during the CI/CD pipeline.
 
 ## Setup Instructions
 
