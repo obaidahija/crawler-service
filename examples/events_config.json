@@ -1,0 +1,69 @@
+{
+  "start_url": "https://example-events.com/events",
+  "engine": "beautifulsoup",
+  "navigation": {
+    "list_items_selector": ".event-item",
+    "detail_link_selector": "a",
+    "detail_link_attribute": "href"
+  },
+  "extractors": [
+    {
+      "field_name": "event_name",
+      "selector_config": {
+        "selector": "h1.event-title",
+        "attribute": "text"
+      }
+    },
+    {
+      "field_name": "date",
+      "selector_config": {
+        "selector": ".event-date",
+        "attribute": "text"
+      }
+    },
+    {
+      "field_name": "location",
+      "selector_config": {
+        "selector": ".event-location",
+        "attribute": "text"
+      }
+    },
+    {
+      "field_name": "description",
+      "selector_config": {
+        "selector": ".event-description",
+        "attribute": "text"
+      }
+    },
+    {
+      "field_name": "organizer",
+      "selector_config": {
+        "selector": ".organizer-info",
+        "attribute": "text"
+      }
+    },
+    {
+      "field_name": "registration_link",
+      "selector_config": {
+        "selector": ".register-btn",
+        "attribute": "href"
+      }
+    }
+  ],
+  "pagination": {
+    "enabled": true,
+    "next_page_selector": "a.next-page",
+    "next_page_attribute": "href",
+    "max_pages": 10
+  },
+  "wait_config": {
+    "page_load_timeout": 10,
+    "element_wait_timeout": 5,
+    "delay_between_requests": 1.5
+  },
+  "context": {
+    "source": "events_website",
+    "category": "events",
+    "extraction_date": "2025-01-08"
+  }
+}

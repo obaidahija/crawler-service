@@ -1,0 +1,55 @@
+{
+  "start_url": "https://example-ecommerce.com/products",
+  "engine": "selenium",
+  "navigation": {
+    "list_items_selector": ".product-card",
+    "detail_link_selector": "a.product-link",
+    "detail_link_attribute": "href"
+  },
+  "extractors": [
+    {
+      "field_name": "title",
+      "selector_config": {
+        "selector": "h1.product-title",
+        "attribute": "text"
+      }
+    },
+    {
+      "field_name": "price",
+      "selector_config": {
+        "selector": ".price",
+        "attribute": "text"
+      }
+    },
+    {
+      "field_name": "description",
+      "selector_config": {
+        "selector": ".product-description",
+        "attribute": "text"
+      }
+    },
+    {
+      "field_name": "images",
+      "selector_config": {
+        "selector": ".product-images img",
+        "attribute": "src",
+        "multiple": true
+      }
+    }
+  ],
+  "pagination": {
+    "enabled": true,
+    "next_page_selector": ".pagination .next",
+    "next_page_attribute": "href",
+    "max_pages": 5
+  },
+  "wait_config": {
+    "page_load_timeout": 15,
+    "element_wait_timeout": 10,
+    "delay_between_requests": 2.0
+  },
+  "context": {
+    "source": "ecommerce_site",
+    "category": "products"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "start_url": "https://example-blog.com/single-article",
+  "engine": "beautifulsoup",
+  "extractors": [
+    {
+      "field_name": "title",
+      "selector_config": {
+        "selector": "h1.article-title",
+        "attribute": "text"
+      }
+    },
+    {
+      "field_name": "author",
+      "selector_config": {
+        "selector": ".author-name",
+        "attribute": "text"
+      }
+    },
+    {
+      "field_name": "publish_date",
+      "selector_config": {
+        "selector": ".publish-date",
+        "attribute": "text"
+      }
+    },
+    {
+      "field_name": "content",
+      "selector_config": {
+        "selector": ".article-content",
+        "attribute": "text"
+      }
+    },
+    {
+      "field_name": "tags",
+      "selector_config": {
+        "selector": ".tags .tag",
+        "attribute": "text",
+        "multiple": true
+      }
+    }
+  ],
+  "wait_config": {
+    "page_load_timeout": 10,
+    "element_wait_timeout": 5,
+    "delay_between_requests": 1.0
+  },
+  "context": {
+    "source": "blog",
+    "type": "single_page"
+  }
+}
