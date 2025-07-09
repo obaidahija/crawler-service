@@ -1,0 +1,259 @@
+name: Build and Deploy Crawler Service
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      deploy_environment:
+        description: 'Environment to deploy to'
+        required: false
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+          - skip
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: Run Tests
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-asyncio httpx
+        
+    - name: Run tests
+      run: |
+        python -m pytest test_service.py -v
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    name: Build Docker Image
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-tag: ${{ steps.meta.outputs.version }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Log in to Container Registry
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+        labels: |
+          org.opencontainers.image.title=Crawler Service
+          org.opencontainers.image.description=Web crawler service with BeautifulSoup and Selenium support
+          org.opencontainers.image.vendor=${{ github.repository_owner }}
+          
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64
+        
+    - name: Test Docker image
+      if: github.event_name != 'pull_request'
+      run: |
+        docker run --rm --name test-crawler \
+          -p 8000:8000 \
+          -d ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+        
+        # Wait for the service to start
+        sleep 15
+        
+        # Test health endpoint
+        curl -f http://localhost:8000/health || exit 1
+        
+        # Stop the test container
+        docker stop test-crawler
+        
+        echo "✅ Docker image test passed"
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    name: Deploy Service
+    if: |
+      github.ref == 'refs/heads/main' || 
+      github.ref == 'refs/heads/master' || 
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_environment != 'skip')
+    environment: ${{ github.event.inputs.deploy_environment || 'staging' }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set deployment variables
+      id: vars
+      run: |
+        DEPLOY_ENV="${{ github.event.inputs.deploy_environment || 'staging' }}"
+        echo "environment=${DEPLOY_ENV}" >> $GITHUB_OUTPUT
+        echo "image_name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image-tag }}" >> $GITHUB_OUTPUT
+        
+        if [ "${DEPLOY_ENV}" == "production" ]; then
+          echo "service_name=crawler-service-prod" >> $GITHUB_OUTPUT
+        else
+          echo "service_name=crawler-service-staging" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Deploy with Docker Compose (SSH)
+      if: ${{ vars.DEPLOYMENT_METHOD == 'docker-compose' || vars.DEPLOYMENT_METHOD == '' }}
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ steps.vars.outputs.environment == 'production' && secrets.PROD_HOST || secrets.STAGING_HOST }}
+        username: ${{ steps.vars.outputs.environment == 'production' && secrets.PROD_USER || secrets.STAGING_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        port: ${{ secrets.SSH_PORT || '22' }}
+        script: |
+          cd /opt/crawler-service
+          
+          # Create docker-compose.yml if it doesn't exist
+          if [ ! -f docker-compose.yml ]; then
+            cat > docker-compose.yml << EOF
+          version: '3.8'
+          services:
+            crawler-service:
+              image: ${{ steps.vars.outputs.image_name }}
+              ports:
+                - "8000:8000"
+              environment:
+                - PYTHONPATH=/app
+                - CHROME_BIN=/usr/bin/google-chrome
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+                interval: 30s
+                timeout: 10s
+                retries: 3
+          EOF
+          else
+            # Update image in existing docker-compose.yml
+            sed -i 's|image:.*|image: ${{ steps.vars.outputs.image_name }}|g' docker-compose.yml
+          fi
+          
+          # Login to registry
+          echo ${{ secrets.GITHUB_TOKEN }} | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+          
+          # Pull new image and restart
+          docker-compose pull
+          docker-compose up -d
+          
+          # Wait for service
+          sleep 30
+          
+          # Health check
+          curl -f http://localhost:8000/health || exit 1
+          
+          echo "✅ Deployment completed successfully"
+          
+    - name: Deploy to Kubernetes
+      if: ${{ vars.DEPLOYMENT_METHOD == 'kubernetes' }}
+      run: |
+        # Install kubectl
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        sudo mv kubectl /usr/local/bin/
+        
+        # Configure kubectl
+        echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+        
+        # Update deployment
+        kubectl set image deployment/${{ steps.vars.outputs.service_name }} \
+          crawler-service=${{ steps.vars.outputs.image_name }}
+        
+        # Wait for rollout
+        kubectl rollout status deployment/${{ steps.vars.outputs.service_name }} --timeout=300s
+        
+        echo "✅ Kubernetes deployment completed"
+        
+    - name: Post-deployment health check
+      run: |
+        echo "🔍 Running post-deployment health check..."
+        
+        # Get service URL based on environment
+        if [ "${{ steps.vars.outputs.environment }}" == "production" ]; then
+          SERVICE_URL="${{ secrets.PROD_SERVICE_URL || 'http://localhost:8000' }}"
+        else
+          SERVICE_URL="${{ secrets.STAGING_SERVICE_URL || 'http://localhost:8000' }}"
+        fi
+        
+        # Wait for service to be ready
+        for i in {1..30}; do
+          if curl -f "${SERVICE_URL}/health" > /dev/null 2>&1; then
+            echo "✅ Health check passed"
+            exit 0
+          fi
+          echo "Waiting for service to be ready... (attempt $i/30)"
+          sleep 10
+        done
+        
+        echo "❌ Health check failed after 5 minutes"
+        exit 1
+        
+    - name: Notify deployment status
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "🎉 Deployment to ${{ steps.vars.outputs.environment }} completed successfully!"
+          echo "Image: ${{ steps.vars.outputs.image_name }}"
+          echo "Digest: ${{ needs.build.outputs.image-digest }}"
+        else
+          echo "❌ Deployment to ${{ steps.vars.outputs.environment }} failed!"
+        fi
