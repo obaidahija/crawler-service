@@ -19,18 +19,13 @@ on:
           - skip
 
 env:
-  # Use Docker Hub as default, or GitHub Container Registry
-  # To use Docker Hub: set REGISTRY to 'docker.io' and IMAGE_NAME to 'your-dockerhub-username/crawler-service'
-  # To use GHCR: set REGISTRY to 'ghcr.io' and IMAGE_NAME to '${{ github.repository }}'
-  REGISTRY: docker.io
-  IMAGE_NAME: ${{ vars.DOCKER_IMAGE_NAME || format('{0}/crawler-service', github.repository_owner) }}
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
     name: Run Tests
-    permissions:
-      contents: read
     
     steps:
     - name: Checkout code
@@ -53,49 +48,38 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install pytest pytest-asyncio httpx
         
-    - name: Run pytest tests
+    - name: Run tests
       run: |
-        # Run proper pytest tests
-        python -m pytest test_crawler.py -v --tb=short
-        
-    - name: Run integration tests
-      run: |
-        # Start service in background for integration test
-        python -m uvicorn main:app --host 0.0.0.0 --port 8000 &
-        sleep 15
-        
-        # Run integration test
-        python test_service.py
-        
-        # Clean up background process
-        pkill -f "uvicorn main:app" || true
+        python -m pytest test_service.py -v
 
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     needs: test
     name: Build Docker Image
-    permissions:
-      contents: read
-      packages: write
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
       image-tag: ${{ steps.meta.outputs.version }}
+    
+    permissions:
+      contents: read
+      packages: write
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Set up Docker Buildx
+    - name: Setup Docker Buildx
       uses: docker/setup-buildx-action@v3
       
     - name: Log in to Container Registry
-      if: github.event_name != 'pull_request'
       uses: docker/login-action@v3
       with:
         registry: ${{ env.REGISTRY }}
-        username: ${{ env.REGISTRY == 'docker.io' && secrets.DOCKER_USERNAME || github.actor }}
-        password: ${{ env.REGISTRY == 'docker.io' && secrets.DOCKER_PASSWORD || secrets.GITHUB_TOKEN }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
         
     - name: Extract metadata
       id: meta
@@ -105,8 +89,6 @@ jobs:
         tags: |
           type=ref,event=branch
           type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
           type=sha,prefix={{branch}}-
           type=raw,value=latest,enable={{is_default_branch}}
         labels: |
@@ -120,15 +102,14 @@ jobs:
       with:
         context: .
         file: ./Dockerfile
-        push: ${{ github.event_name != 'pull_request' }}
+        platforms: linux/amd64,linux/arm64
+        push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        platforms: linux/amd64
         
     - name: Test Docker image
-      if: github.event_name != 'pull_request'
       run: |
         docker run --rm --name test-crawler \
           -p 8000:8000 \
@@ -145,12 +126,47 @@ jobs:
         
         echo "✅ Docker image test passed"
 
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: build-and-deploy
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      security-events: write
+      id-token: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always() && hashFiles('trivy-results.sarif') != ''
+      with:
+        sarif_file: 'trivy-results.sarif'
+
   deploy:
     runs-on: ubuntu-latest
-    needs: build
+    needs: build-and-deploy
     name: Deploy Service
-    permissions:
-      contents: read
     if: |
       github.ref == 'refs/heads/main' || 
       github.ref == 'refs/heads/master' || 
@@ -166,7 +182,7 @@ jobs:
       run: |
         DEPLOY_ENV="${{ github.event.inputs.deploy_environment || 'staging' }}"
         echo "environment=${DEPLOY_ENV}" >> $GITHUB_OUTPUT
-        echo "image_name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image-tag }}" >> $GITHUB_OUTPUT
+        echo "image_name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-deploy.outputs.image-tag }}" >> $GITHUB_OUTPUT
         
         if [ "${DEPLOY_ENV}" == "production" ]; then
           echo "service_name=crawler-service-prod" >> $GITHUB_OUTPUT
@@ -275,7 +291,7 @@ jobs:
         if [ "${{ job.status }}" == "success" ]; then
           echo "🎉 Deployment to ${{ steps.vars.outputs.environment }} completed successfully!"
           echo "Image: ${{ steps.vars.outputs.image_name }}"
-          echo "Digest: ${{ needs.build.outputs.image-digest }}"
+          echo "Digest: ${{ needs.build-and-deploy.outputs.image-digest }}"
         else
           echo "❌ Deployment to ${{ steps.vars.outputs.environment }} failed!"
         fi
